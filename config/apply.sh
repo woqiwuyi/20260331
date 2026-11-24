@@ -7,6 +7,17 @@ set -euo pipefail
 OPENWRT_DIR="${1:-../openwrt}"
 cd "$OPENWRT_DIR"
 
+# 用 oldconfig 让 Kconfig 重新解析。切换 target 时会产生大量新符号询问，
+# 用 yes '' 自动回车的默认值。注意：pipefail 下 yes 会因 SIGPIPE 返回 1，
+# 因此在调用期间临时关闭 pipefail，使管道退出码取 make oldconfig 的真实结果。
+oldconfig() {
+  set +o pipefail
+  yes '' | make oldconfig >/dev/null
+  local rc=$?
+  set -o pipefail
+  return $rc
+}
+
 # 1) 重置目标平台选择
 sed -i '/^CONFIG_TARGET_/d' .config
 cat >> .config <<'EOF'
@@ -15,9 +26,7 @@ CONFIG_TARGET_ramips_mt7621=y
 CONFIG_TARGET_ramips_mt7621_DEVICE_d-team_newifi-d2=y
 EOF
 
-# 让 Kconfig 按目标重新解析（新符号取默认值，非交互）
-# 注意：不要用 `yes '' | make oldconfig`，pipefail 下 yes 会因 SIGPIPE 返回 1
-make olddefconfig >/dev/null
+oldconfig
 
 # 2) 应用自定义配置：先删旧值，再写新值，避免重复定义
 CUSTOM="../build-repo/config/custom.config"
@@ -37,6 +46,6 @@ while IFS= read -r line || [ -n "$line" ]; do
 done < "$CUSTOM"
 
 # 3) 再解析一次，处理依赖关系
-make olddefconfig >/dev/null
+oldconfig
 
 echo "apply.sh: .config updated"
