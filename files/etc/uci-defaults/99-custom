@@ -1,0 +1,13 @@
+#!/bin/sh
+# 首次启动执行，执行后自动删除
+
+uci set system.@system[0].hostname='newifi-d2-oc'
+uci set system.@system[0].timezone='CST-8'
+uci set system.@system[0].zonename='Asia/Shanghai'
+
+# 软件流卸载：开；硬件加速：关
+uci set firewall.@defaults[0].flow_offloading='1'
+uci set firewall.@defaults[0].flow_offloading_hw='0'
+
+uci commit
+exit 0
