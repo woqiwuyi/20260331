@@ -1,5 +1,6 @@
 #!/bin/sh
 # 首次启动执行，执行后自动删除
+# Newifi D2 OC1100 定制：主机名/时区、SFO 开 HFO 关、双 WAN (mwan3)
 
 uci set system.@system[0].hostname='newifi-d2-oc'
 uci set system.@system[0].timezone='CST-8'
@@ -9,5 +10,42 @@ uci set system.@system[0].zonename='Asia/Shanghai'
 uci set firewall.@defaults[0].flow_offloading='1'
 uci set firewall.@defaults[0].flow_offloading_hw='0'
 
+# ------------------------------------------------------------------
+# 双 WAN：把 lan1 (switch port@3) 划为第二个 WAN，接口名 wanb
+#   - 物理口：原 WAN=port4(wan)，新增 WAN2=lan1(port3)
+#   - 保留 lan2/lan3/lan4 在 br-lan 作为 LAN
+#   - 命名 wanb 是为了对齐 mwan3 默认配置里已有的 wanb 相关 section
+# ------------------------------------------------------------------
+
+# 1) 从所有 bridge device 的 ports 中移除 lan1（不论 section 是匿名还是命名）
+for dev in $(uci show network | sed -n "s/^network\.\([^.]*\)\.ports=.*/\1/p"); do
+    uci -q del_list "network.${dev}.ports=lan1"
+done
+
+# 2) 新建第二 WAN 接口 wanb，绑定 lan1，DHCP 客户端
+uci -q set network.wanb=interface
+uci -q set network.wanb.device='lan1'
+uci -q set network.wanb.proto='dhcp'
+
+# 3) 防火墙：把 wanb 加入 wan 区域，使其获得 NAT / 转发 / DHCP 放行
+for zone in $(uci show firewall | sed -n "s/^firewall\.\([^.]*\)\.name='wan'.*/\1/p"); do
+    uci -q add_list "firewall.${zone}.network=wanb"
+done
+
+# 若 wan 区域是匿名 section（name 匹配不到），退化为按 zone 类型查找
+if [ -z "$(uci show firewall | sed -n "s/^firewall\.\([^.]*\)\.name='wan'.*/\1/p")" ]; then
+    for zone in $(uci show firewall | sed -n "s/^firewall\.\([^.]*\)\.name=wan$/\1/p"); do
+        uci -q add_list "firewall.${zone}.network=wanb"
+    done
+fi
+
+# 4) mwan3：启用第二 WAN 接口，其余 section（成员/策略/规则）用默认模板
+#    默认 balanced 策略已包含 wan 与 wanb 成员，default_rule 走 balanced
+uci -q set mwan3.wanb.enabled='1'
+
 uci commit
+
+# 5) 确保 mwan3 开机自启（首次启动此刻网络尚未完全起来，由 init 脚本接管）
+/etc/init.d/mwan3 enable >/dev/null 2>&1 || true
+
 exit 0
