@@ -1,6 +1,7 @@
 #!/bin/sh
 # 首次启动执行，执行后自动删除
 # Newifi D2 OC1100 定制：主机名/时区、SFO 开 HFO 关、双 WAN (mwan3)
+# 线路：wan=300M(原WAN口)，wanb=100M(LAN1口)，balanced 按 3:1 分流
 
 uci set system.@system[0].hostname='newifi-d2-oc'
 uci set system.@system[0].timezone='CST-8'
@@ -12,7 +13,7 @@ uci set firewall.@defaults[0].flow_offloading_hw='0'
 
 # ------------------------------------------------------------------
 # 双 WAN：把 lan1 (switch port@3) 划为第二个 WAN，接口名 wanb
-#   - 物理口：原 WAN=port4(wan)，新增 WAN2=lan1(port3)
+#   - 物理口：原 WAN=port4(wan) 接 300M；新增 WAN2=lan1(port3) 接 100M
 #   - 保留 lan2/lan3/lan4 在 br-lan 作为 LAN
 #   - 命名 wanb 是为了对齐 mwan3 默认配置里已有的 wanb 相关 section
 # ------------------------------------------------------------------
@@ -39,9 +40,35 @@ if [ -z "$(uci show firewall | sed -n "s/^firewall\.\([^.]*\)\.name='wan'.*/\1/p
     done
 fi
 
-# 4) mwan3：启用第二 WAN 接口，其余 section（成员/策略/规则）用默认模板
-#    默认 balanced 策略已包含 wan 与 wanb 成员，default_rule 走 balanced
+# ------------------------------------------------------------------
+# 4) mwan3 配置
+# ------------------------------------------------------------------
+# 4a) 启用第二 WAN 接口（默认 disabled）
 uci -q set mwan3.wanb.enabled='1'
+
+# 4b) 追踪 IP 换成国内 DNS：默认模板用的是 1.1.1.1 / 208.67.x.x 等境外地址，
+#     移动网络下经常不通，会导致误判 WAN 掉线、频繁切换。改用国内任播 DNS。
+for iface in wan wanb; do
+    uci -q delete "mwan3.${iface}.track_ip"
+    uci -q add_list "mwan3.${iface}.track_ip=223.5.5.5"
+    uci -q add_list "mwan3.${iface}.track_ip=119.29.29.29"
+    uci -q add_list "mwan3.${iface}.track_ip=223.6.6.6"
+done
+
+# 4c) 3:1 分流：默认 balanced 里 wan_m1_w3 与 wanb_m1_w3 权重都是 3（1:1 均分）。
+#     新增一个 weight=1 的 wanb 成员，并把 balanced 里的 wanb_m1_w3 换成它，
+#     得到 wan(weight 3) : wanb(weight 1) = 3:1，匹配 300M : 100M。
+uci -q set mwan3.wanb_m1_w1=member
+uci -q set mwan3.wanb_m1_w1.interface='wanb'
+uci -q set mwan3.wanb_m1_w1.metric='1'
+uci -q set mwan3.wanb_m1_w1.weight='1'
+
+uci -q del_list mwan3.balanced.use_member='wanb_m1_w3'
+uci -q add_list mwan3.balanced.use_member='wanb_m1_w1'
+
+# 4d) 主备策略也同步成 3:1 语义（wan 优先、wanb 低权重），留作日后切换：
+#     wan_wanb 默认用 wanb_m2_w2(weight 2)，wanb_wan 用 wan_m2_w3(weight 3)。
+#     保持不变即可：主备看 metric 不看 weight，wan_wanb 里 wan metric=1 优先。
 
 uci commit
 
