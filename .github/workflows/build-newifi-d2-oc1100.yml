@@ -58,6 +58,9 @@ jobs:
         working-directory: openwrt
         run: |
           ./scripts/feeds update -a
+          # 移除存在 kconfig 递归依赖的 weechat 系列包
+          # 报错：luci-app-weechat -> weechat-full -> weechat-minimal -> luci-app-weechat
+          find feeds -maxdepth 3 -type d \( -name 'weechat' -o -name 'luci-app-weechat' \) -exec rm -rf {} + 2>/dev/null || true
           ./scripts/feeds install -a
 
       - name: Compute PLL divider
@@ -74,16 +77,6 @@ jobs:
           python3 build-repo/scripts/patch_dts.py \
             openwrt/target/linux/ramips/dts/mt7621_d-team_newifi-d2.dts
 
-      - name: Patch kernel clock (${{ env.CPU_MHZ }} MHz)
-        run: |
-          make -C openwrt -j"$(nproc)" target/linux/prepare
-          CLK=$(find openwrt/build_dir -path '*/linux-ramips_mt7621/linux-*/drivers/clk/ralink/clk-mt7621.c' | head -n1)
-          if [ -z "$CLK" ]; then
-            echo "clk-mt7621.c not found" >&2
-            exit 1
-          fi
-          python3 build-repo/scripts/patch_clk.py "$CLK" "${{ env.FBDIV }}"
-
       - name: Install custom files
         run: |
           mkdir -p openwrt/files/etc/uci-defaults
@@ -91,6 +84,7 @@ jobs:
              openwrt/files/etc/uci-defaults/99-custom
           chmod +x openwrt/files/etc/uci-defaults/99-custom
 
+      # 关键点：必须先生成 .config，否则 target/linux/prepare 会触发交互式 menuconfig
       - name: Generate .config
         run: |
           cd openwrt
@@ -100,6 +94,18 @@ jobs:
           grep '^CONFIG_TARGET_ramips' .config | head -n 10
           echo "----- selected packages -----"
           grep -E '^CONFIG_PACKAGE_(luci|mwan3|firewall4|kmod-nft-offload|ppp)' .config | head -n 30
+
+      - name: Patch kernel clock (${{ env.CPU_MHZ }} MHz)
+        run: |
+          make -C openwrt -j"$(nproc)" target/linux/prepare
+          CLK=$(find openwrt/build_dir -path '*/linux-ramips_mt7621/linux-*/drivers/clk/ralink/clk-mt7621.c' | head -n1)
+          if [ -z "$CLK" ]; then
+            echo "clk-mt7621.c not found" >&2
+            exit 1
+          fi
+          echo "patching: $CLK"
+          python3 build-repo/scripts/patch_clk.py "$CLK" "${{ env.FBDIV }}"
+          grep -q 'mt7621_cpu_oc' "$CLK" || { echo "clock patch verification failed" >&2; exit 1; }
 
       - name: Build firmware
         run: |
