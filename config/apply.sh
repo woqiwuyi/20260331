@@ -15,8 +15,9 @@ CONFIG_TARGET_ramips_mt7621=y
 CONFIG_TARGET_ramips_mt7621_DEVICE_d-team_newifi-d2=y
 EOF
 
-# 让 Kconfig 先按目标重新解析（新符号全部取默认值）
-yes '' | make oldconfig >/dev/null
+# 让 Kconfig 按目标重新解析（新符号取默认值，非交互）
+# 注意：不要用 `yes '' | make oldconfig`，pipefail 下 yes 会因 SIGPIPE 返回 1
+make olddefconfig >/dev/null
 
 # 2) 应用自定义配置：先删旧值，再写新值，避免重复定义
 CUSTOM="../build-repo/config/custom.config"
@@ -36,6 +37,6 @@ while IFS= read -r line || [ -n "$line" ]; do
 done < "$CUSTOM"
 
 # 3) 再解析一次，处理依赖关系
-yes '' | make oldconfig >/dev/null
+make olddefconfig >/dev/null
 
 echo "apply.sh: .config updated"
